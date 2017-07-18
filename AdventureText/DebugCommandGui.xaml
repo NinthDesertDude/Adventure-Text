@@ -1,0 +1,55 @@
+﻿<Window x:Class="AdventureText.DebugCommandGui"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:AdventureText"
+        mc:Ignorable="d"
+        Title="Command Window"
+        WindowStartupLocation="CenterScreen"
+        SizeToContent="WidthAndHeight">
+    <StackPanel>
+        <StackPanel Name="GuiExecutePanel"
+                    Margin="8px">
+            <TextBlock Name="GuiInformation"
+                       Margin="0,0,0,4px">
+                    <Run FontWeight="Bold"
+                         Text="Press enter to execute a command below.&#x0a;"/>
+                    <Run Text="Does not recognize if-statements, header options, or comments."/>
+            </TextBlock>
+            <TextBox Name="GuiInput"
+                     Margin="0,0,0,4px"/>
+            <TextBlock Name="GuiResponse"/>
+        </StackPanel>
+        <StackPanel Name="GuiVariablesPanel"
+                    Margin="8px">
+            <TextBlock Name="GuiVariablesInfo"
+                       Margin="0,0,0,4px"
+                       FontWeight="Bold">
+                    Variables.
+            </TextBlock>
+            <Border BorderThickness="1"
+                    BorderBrush="Black">
+                <ScrollViewer MaxHeight="100px"
+                              VerticalScrollBarVisibility="Auto">
+                    <TextBlock Name="GuiVariables"/>
+                </ScrollViewer>
+            </Border>
+        </StackPanel>
+        <StackPanel Name="GuiNavigatePanel"
+                        Margin="8px">
+            <TextBlock Name="GuiNavigateInfo"
+                           Margin="0,0,0,4px"
+                           FontWeight="Bold">
+                    Click a fork to go to it.
+            </TextBlock>
+            <Border BorderThickness="1"
+                    BorderBrush="Black">
+                <ScrollViewer MaxHeight="100px"
+                              VerticalScrollBarVisibility="Auto">
+                    <TextBlock Name="GuiNavigateForks"/>
+                </ScrollViewer>
+            </Border>
+        </StackPanel>
+    </StackPanel>
+</Window>
