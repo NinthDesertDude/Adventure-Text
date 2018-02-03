@@ -1130,98 +1130,82 @@ namespace AdventureText.Parsing
                 }
                 #endregion
 
-                #region Parse in-line options. Syntax: link@ output@forkname.
-                else if (textLeft.StartsWith("link@"))
+                #region Parse in-line options. Syntax: output@@forkname.
+                else if (line.Contains("@@"))
                 {
-                    line = line.Substring(5);
+                    //Gets the fork name. Case and space insensitive.
+                    string forkName = line
+                        .Substring(line.IndexOf('@') + 2)
+                        .Replace(" ", String.Empty)
+                        .ToLower();
 
-                    if (line.Contains('@'))
+                    string displayName = line
+                        .Substring(0, line.IndexOf('@'))
+                        .Trim()
+                        .Replace(@"\at", "@")
+                        .Replace(@"\n", "\n")
+                        .Replace(@"\s", @"\");
+
+                    //Handles having no hyperlink or display name.
+                    if (forkName.Trim() == String.Empty && ShowErrors)
                     {
-                        //Gets the fork name. Case and space insensitive.
-                        string forkName = line
-                            .Substring(line.IndexOf('@') + 1)
-                            .Replace(" ", String.Empty)
-                            .ToLower();
-
-                        string displayName = line
-                            .Substring(0, line.IndexOf('@'))
-                            .Trim()
-                            .Replace(@"\at", "@")
-                            .Replace(@"\n", "\n")
-                            .Replace(@"\s", @"\");
-
-                        //Handles having no hyperlink or display name.
-                        if (forkName.Trim() == String.Empty && ShowErrors)
-                        {
-                            throw new InterpreterException("Interpreter: " +
-                                "there was no fork name given to option '" +
-                                displayName + "'.");
-                        }
-                        else if (displayName.Trim() == String.Empty && ShowErrors)
-                        {
-                            throw new InterpreterException("Interpreter: " +
-                                "the option linking to '" + forkName + "' has no " +
-                                "displayable text specified.");
-                        }
-                        else if (!_entries.Keys.Contains(forkName) && ShowErrors)
-                        {
-                            throw new InterpreterException("Interpreter: " +
-                                "The fork in the option '" + displayName +
-                                "@" + forkName + "' doesn't exist.");
-                        }
-                        else
-                        {
-                            //Creates a hyperlink option for the console's
-                            //output text rather than options.
-                            Run generatedRun = new Run(displayName);
-                            generatedRun.Foreground = _console.PrefOptColor;
-                            generatedRun.FontFamily = _console.PrefOptFontFamily;
-                            generatedRun.FontSize = _console.PrefOptFontSize;
-                            generatedRun.FontWeight = _console.PrefOptFontWeight;
-
-                            //Sets the color.
-
-                            //If the in-line options should be styled like
-                            //options, captures colors to local variables to
-                            //keep them constant.
-                            if (_optLinkStyleHidden)
-                            {
-                                generatedRun.Foreground = _console.PrefOutColor;
-                            }
-                            else
-                            {
-                                Brush optHgltColor = _console.PrefOptHighlightColor;
-                                Brush optColor = _console.PrefOptColor;
-
-                                //Changes color in response to mouse.
-                                generatedRun.MouseEnter += (a, b) =>
-                                {
-                                    generatedRun.Foreground = optHgltColor;
-                                };
-                                generatedRun.MouseLeave += (a, b) =>
-                                {
-                                    generatedRun.Foreground = optColor;
-                                };
-                            }
-
-                            //Responds to clicks.
-                            generatedRun.MouseLeftButtonDown += (a, b) =>
-                            {
-                                SetFork(forkName);
-                            };
-
-                            //Adds to options.
-                            _console.AddText(generatedRun);
-                        }
+                        throw new InterpreterException("Interpreter: " +
+                        "there was no fork name given to option '" +
+                        displayName + "'.");
+                    }
+                    else if (displayName.Trim() == String.Empty && ShowErrors)
+                    {
+                        throw new InterpreterException("Interpreter: " +
+                        "the option linking to '" + forkName + "' has no " +
+                        "displayable text specified.");
+                    }
+                    else if (!_entries.Keys.Contains(forkName) && ShowErrors)
+                    {
+                        throw new InterpreterException("Interpreter: " +
+                            "The fork in the option '" + displayName +
+                            "@" + forkName + "' doesn't exist.");
                     }
                     else
                     {
-                        if (ShowErrors)
+                        //Creates a hyperlink option for the console's
+                        //output text rather than options.
+                        Run generatedRun = new Run(displayName);
+                        generatedRun.Foreground = _console.PrefOptColor;
+                        generatedRun.FontFamily = _console.PrefOptFontFamily;
+                        generatedRun.FontSize = _console.PrefOptFontSize;
+                        generatedRun.FontWeight = _console.PrefOptFontWeight;
+
+                        //If the in-line options should be styled like
+                        //options, captures colors to local variables to
+                        //keep them constant.
+                        if (_optLinkStyleHidden)
                         {
-                            throw new InterpreterException("Interpreter: " +
-                                "In the line '" + line + "', an option " +
-                                "must be specified.");
+                            generatedRun.Foreground = _console.PrefOutColor;
                         }
+                        else
+                        {
+                            Brush optHgltColor = _console.PrefOptHighlightColor;
+                            Brush optColor = _console.PrefOptColor;
+
+                            //Changes color in response to mouse.
+                            generatedRun.MouseEnter += (a, b) =>
+                            {
+                                generatedRun.Foreground = optHgltColor;
+                            };
+                            generatedRun.MouseLeave += (a, b) =>
+                            {
+                                generatedRun.Foreground = optColor;
+                            };
+                        }
+
+                        //Responds to clicks.
+                        generatedRun.MouseLeftButtonDown += (a, b) =>
+                        {
+                            SetFork(forkName);
+                        };
+
+                        //Adds to options.
+                        _console.AddText(generatedRun);
                     }
 
                     //Deletes the line just processed.
