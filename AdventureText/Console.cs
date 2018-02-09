@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using AdventureText.Speech;
+using System.Collections.Generic;
 
 namespace AdventureText
 {
@@ -17,17 +18,32 @@ namespace AdventureText
     {
         #region Fields
         private ConsoleGui _gui; //The underlying gui.
+
         private FontFamily _prefOutFontFamily; //Default font family.
+
         private double _prefOutFontSize; //Default font size.
+
         private FontWeight _prefOutFontWeight; //Default font weight.
+
         private Brush _prefOutColor; //The color of the text.
+
         private Brush _prefBackColor; //The color of the console.
-        private FontFamily _prefOptFontFamily; //Default option font family.
+
+        private FontFamily _prefOptFontFamily; //Default options font family.
+
         private double _prefOptFontSize; //Default options font size.
+
         private FontWeight _prefOptFontWeight; //Default options font weight.
+
         private Brush _prefOptColor; //The un-hovered options color.
+
         private Brush _prefOptHighlightColor; //The hovered options color.
+
         private SpeechEngine _speechEngine; //For general speech support.
+
+        private bool _logEnabled; //Whether input and output is logged or not.
+
+        private List<Tuple<LogTypes, string>> _log; //A log to track content.
         #endregion
 
         #region Properties
@@ -46,6 +62,7 @@ namespace AdventureText
                 _gui.FontFamily = _prefOutFontFamily;
             }
         }
+        
         /// <summary>
         /// Sets/gets the font family for options in the console.
         /// </summary>
@@ -60,6 +77,7 @@ namespace AdventureText
                 _prefOptFontFamily = value;
             }
         }
+        
         /// <summary>
         /// Sets/gets the font size for the console.
         /// </summary>
@@ -75,6 +93,7 @@ namespace AdventureText
                 _gui.FontSize = _prefOutFontSize;
             }
         }
+        
         /// <summary>
         /// Sets/gets the font weight for the console.
         /// </summary>
@@ -90,6 +109,7 @@ namespace AdventureText
                 _gui.FontWeight = _prefOutFontWeight;
             }
         }
+        
         /// <summary>
         /// Sets/gets the font color for the console.
         /// </summary>
@@ -105,6 +125,7 @@ namespace AdventureText
                 _gui.Foreground = _prefOutColor;
             }
         }
+        
         /// <summary>
         /// Sets/gets the console's background color.
         /// </summary>
@@ -120,6 +141,7 @@ namespace AdventureText
                 _gui.Background = _prefBackColor;
             }
         }
+        
         /// <summary>
         /// Sets/gets the default color of options.
         /// </summary>
@@ -134,6 +156,7 @@ namespace AdventureText
                 _prefOptColor = value;
             }
         }
+        
         /// <summary>
         /// Sets/gets the default color of highlighted options.
         /// </summary>
@@ -148,6 +171,7 @@ namespace AdventureText
                 _prefOptHighlightColor = value;
             }
         }
+        
         /// <summary>
         /// Sets/gets the font size for options in the console.
         /// </summary>
@@ -162,6 +186,7 @@ namespace AdventureText
                 _prefOptFontSize = value;
             }
         }
+        
         /// <summary>
         /// Sets/gets the font weight for options in the console.
         /// </summary>
@@ -176,6 +201,7 @@ namespace AdventureText
                 _prefOptFontWeight = value;
             }
         }
+        
         /// <summary>
         /// Provides speech and text conversion functionality.
         /// </summary>
@@ -188,6 +214,21 @@ namespace AdventureText
             get
             {
                 return _speechEngine;
+            }
+        }
+
+        /// <summary>
+        /// Whether input and output is logged or not.
+        /// </summary>
+        public bool LogEnabled
+        {
+            get
+            {
+                return _logEnabled;
+            }
+            set
+            {
+                _logEnabled = value;
             }
         }
         #endregion
@@ -204,6 +245,7 @@ namespace AdventureText
             //Sets default values.
             _gui = gui;
             _speechEngine = new SpeechEngine();
+            _log = new List<Tuple<LogTypes, string>>();
 
             //Sets default console preferences.
             ResetPreferences();
@@ -359,6 +401,11 @@ namespace AdventureText
             //Responds to clicks.
             generatedRun.MouseLeftButtonDown += (a, b) =>
             {
+                if (LogEnabled)
+                {
+                    _log.Add(new Tuple<LogTypes, string>(LogTypes.Input, text));
+                }
+
                 clickAction.Invoke();
             };
 
@@ -396,6 +443,11 @@ namespace AdventureText
             //Responds to clicks.
             run.MouseLeftButtonDown += (a, b) =>
             {
+                if (LogEnabled)
+                {
+                    _log.Add(new Tuple<LogTypes, string>(LogTypes.Input, run.Text));
+                }
+
                 clickAction.Invoke();
             };
 
@@ -417,6 +469,11 @@ namespace AdventureText
             generatedRun.FontWeight = PrefOutFontWeight;
 
             _gui.GuiOutput.Inlines.Add(generatedRun);
+
+            if (LogEnabled)
+            {
+                _log.Add(new Tuple<LogTypes, string>(LogTypes.Output, text));
+            }
         }
 
         /// <summary>
@@ -430,6 +487,11 @@ namespace AdventureText
         public void AddText(Run run)
         {
             _gui.GuiOutput.Inlines.Add(run);
+
+            if (LogEnabled)
+            {
+                _log.Add(new Tuple<LogTypes, string>(LogTypes.Output, run.Text));
+            }
         }
 
         /// <summary>
@@ -514,6 +576,8 @@ namespace AdventureText
             PrefOptFontFamily = new FontFamily("Arial,Helvetica,Sans Serif");
             PrefOptFontSize = 16;
             PrefOptFontWeight = FontWeights.Normal;
+
+            LogEnabled = true;
         }
 
         /// <summary>
@@ -575,6 +639,22 @@ namespace AdventureText
             }
 
             _gui.Width = width;
+        }
+
+        /// <summary>
+        /// Returns the log.
+        /// </summary>
+        public List<Tuple<LogTypes, string>> GetLog()
+        {
+            return _log;
+        }
+
+        /// <summary>
+        /// Clears the log.
+        /// </summary>
+        public void ClearLog()
+        {
+            _log.Clear();
         }
         #endregion
     }

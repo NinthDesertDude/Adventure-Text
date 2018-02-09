@@ -6,6 +6,7 @@ using System.Media;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Documents;
+using System.Windows.Forms;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -80,9 +81,20 @@ namespace AdventureText.Parsing
         private Dictionary<string, object> _variables;
 
         /// <summary>
+        /// Stores a copy of all variables as they were just before visiting
+        /// a new page. This is used when saving.
+        /// </summary>
+        private Dictionary<string, object> _prevVariables;
+
+        /// <summary>
         /// Used to stop evaluation of the current fork entirely.
         /// </summary>
         private bool _stopEvaluation;
+
+        /// <summary>
+        /// Stores the most recent save URL for future saves.
+        /// </summary>
+        private string _saveLocation;
         #endregion
 
         #region Properties
@@ -150,117 +162,287 @@ namespace AdventureText.Parsing
         /// </param>
         public Interpreter(Console console)
         {
-            _actions = new List<Console.OnSubmitHandler>();
             _console = console;
+            console.OnKeyDown += ProcessKeyboardShortcuts;
             _entries = new Dictionary<string, ParseNode>();
-            _fork = String.Empty;
-            _optLinkStyleHidden = false;
-            _optOptionDefault = "restart";
-            _optOptionEnabled = true;
             _rng = new Random();
-            _timers = new List<DispatcherTimer>();
-            _variables = new Dictionary<string, object>();
             _stopEvaluation = false;
-
-            console.OnKeyDown += OpenCommandDialog;
+            _saveLocation = "";
+            RefreshInterpreter();
         }
         #endregion
 
         #region Methods
         /// <summary>
-        /// Opens a command input dialog to process inputted commands.
+        /// Initializes or resets the interpreter states.
         /// </summary>
-        private void OpenCommandDialog(object sender,
-            System.Windows.Input.KeyEventArgs e)
+        private void RefreshInterpreter()
         {
-            //Exits unless Ctrl + Space is being pressed.
-            if ((!e.KeyboardDevice.IsKeyDown(System.Windows.Input.Key.LeftCtrl) &&
-                !e.KeyboardDevice.IsKeyDown(System.Windows.Input.Key.RightCtrl)) ||
-                e.Key != System.Windows.Input.Key.Space)
+            _actions = new List<Console.OnSubmitHandler>();
+            _fork = String.Empty;
+            _optLinkStyleHidden = false;
+            _optOptionDefault = "restart";
+            _optOptionEnabled = true;
+            _timers = new List<DispatcherTimer>();
+            _variables = new Dictionary<string, object>();
+            _prevVariables = new Dictionary<string, object>();
+        }
+
+        /// <summary>
+        /// Attempts to save the file to a user-specified location.
+        /// </summary>
+        private void SaveFile()
+        {
+            //Prompts for a save location if none is recorded.
+            if (!File.Exists(_saveLocation))
             {
-                return;
+                SaveFileDialog dlg = new SaveFileDialog();
+                dlg.CheckPathExists = true;
+                dlg.Title = "Save game";
+                dlg.Filter = "saved games|*.txtsav";
+                dlg.AddExtension = true;
+                if (dlg.ShowDialog() == DialogResult.OK)
+                {
+                    _saveLocation = dlg.FileName;
+                }
+                else
+                {
+                    return;
+                }
             }
 
-            DebugCommand debugWindow = new DebugCommand();
-
-            //Handles code execution for the debug window.
-            debugWindow.OnExecuteQuery += new Action<string>((a) =>
+            try
             {
-                bool isACommand = true;
+                using (FileStream fs = File.OpenWrite(_saveLocation))
+                {
+                    using (BinaryWriter bw = new BinaryWriter(fs))
+                    {
+                        //Writes the app version for backwards copmatibility.
+                        bw.Write(System.Diagnostics.FileVersionInfo.GetVersionInfo(
+                            System.Reflection.Assembly.GetExecutingAssembly()
+                            .Location).ProductVersion);
 
-                //Attempts to process the command as normal otherwise.
-                ParseNode textNode = new ParseNode();
-                textNode.Text = a;
+                        //Lists the current fork.
+                        bw.Write(_fork);
 
+                        //Records all variables and values.
+                        for (int i = 0; i < _prevVariables.Count; i++)
+                        {
+                            bw.Write(_prevVariables.Keys.ElementAt(i));
+
+                            //Each value is preceeded by a string to identify type.
+                            if (_prevVariables.Values.ElementAt(i) is bool boolVal)
+                            {
+                                bw.Write(boolVal.GetType().GUID.ToString());
+                                bw.Write(boolVal);
+                            }
+                            else if (_prevVariables.Values.ElementAt(i) is decimal decVal)
+                            {
+                                bw.Write(decVal.GetType().GUID.ToString());
+                                bw.Write(decVal);
+                            }
+                            else if (_prevVariables.Values.ElementAt(i) is string strVal)
+                            {
+                                bw.Write(strVal.GetType().GUID.ToString());
+                                bw.Write(strVal);
+                            }
+                        }
+
+                        bw.Flush();
+                    }
+                }
+            }
+            catch
+            {
+                System.Windows.MessageBox.Show("Couldn't save.");
+            }
+        }
+
+        /// <summary>
+        /// Attempts to load the user-specified file.
+        /// </summary>
+        private void LoadFile()
+        {
+            //Prompts for a load location.
+            OpenFileDialog dlg = new OpenFileDialog();
+            dlg.CheckFileExists = true;
+            dlg.CheckPathExists = true;
+            dlg.Title = "Load game";
+            dlg.Filter = "saved games|*.txtsav";
+            if (dlg.ShowDialog() == DialogResult.OK)
+            {
                 try
                 {
-                    ProcessText(textNode);
-                }
+                    using (FileStream fs = File.OpenRead(dlg.FileName))
+                    {
+                        using (BinaryReader br = new BinaryReader(fs))
+                        {
+                            //Resets the interpreter.
+                            RefreshInterpreter();
 
-                //If not a valid header or normal command, it is bad.
-                catch (Exception ex)
+                            br.ReadString(); //Version
+                            string fork = br.ReadString();
+
+                            //Reads all variables.
+                            while (fs.Position < fs.Length - 1)
+                            {
+                                string varName = br.ReadString();
+                                string typeGuid = br.ReadString();
+
+                                if (typeGuid == typeof(bool).GUID.ToString())
+                                {
+                                    _variables.Add(varName, br.ReadBoolean());
+                                }
+                                else if (typeGuid == typeof(decimal).GUID.ToString())
+                                {
+                                    _variables.Add(varName, br.ReadDecimal());
+                                }
+                                else if (typeGuid == typeof(string).GUID.ToString())
+                                {
+                                    _variables.Add(varName, br.ReadString());
+                                }
+                            }
+
+                            SetFork(fork);
+                        }
+                    }
+                }
+                catch
                 {
-                    debugWindow.SetExecInfo("Command not understood. Error: " +
-                        ex.Message);
-
-                    isACommand = false;
+                    System.Windows.MessageBox.Show("Couldn't load.");
                 }
+            }
+        }
 
-                if (isACommand)
-                {
-                    debugWindow.SetExecInfo("Command executed.");
-                    debugWindow.RefreshLists();
-                }
-            });
-
-            //Handles populating the list of forks for the debug window.
-            debugWindow.OnLoadForks += new Action(() =>
+        /// <summary>
+        /// Handles all keyboard shortcuts.
+        /// </summary>
+        private void ProcessKeyboardShortcuts(object sender,
+            System.Windows.Input.KeyEventArgs e)
+        {
+            //Keyboard shortcuts based on holding down Ctrl.
+            if (e.KeyboardDevice.IsKeyDown(System.Windows.Input.Key.LeftCtrl) ||
+                e.KeyboardDevice.IsKeyDown(System.Windows.Input.Key.RightCtrl))
             {
-                debugWindow.ClearForks();
-                List<string> forkNames = Entries.Keys.ToList();
-
-                foreach (string name in forkNames)
+                //Prompts to load a saved file when Ctrl + O is pressed.
+                if (e.Key == System.Windows.Input.Key.O)
                 {
-                    Run option = new Run(name + "\n");
-
-                    //Highlights forks under the mouse.
-                    option.MouseEnter += new System.Windows.Input.MouseEventHandler((a, b) =>
-                    {
-                        option.Background = Brushes.AliceBlue;
-                    });
-
-                    option.MouseLeave += new System.Windows.Input.MouseEventHandler((a, b) =>
-                    {
-                        option.Background = Brushes.White;
-                    });
-
-                    //Navigates to a fork when clicked.
-                    option.MouseDown += new System.Windows.Input.MouseButtonEventHandler((a, b) =>
-                    {
-                        SetFork(name);
-                        debugWindow.RefreshLists();
-                    });
-
-                    debugWindow.AddToForks(option);
+                    LoadFile();
                 }
-            });
 
-            //Handles populating the list of variables for the debug window.
-            debugWindow.OnLoadVariables += new Action(() =>
-            {
-                debugWindow.ClearVariables();
-                var varNames = _variables;
-
-                for (int i = 0; i < varNames.Count; i++)
+                //Prompts to save the game state when Ctrl + S is pressed.
+                else if (e.Key == System.Windows.Input.Key.S)
                 {
-                    string varName = varNames.Keys.ElementAt(i);
-                    string varValue = varNames.Values.ElementAt(i).ToString();
-                    Run option = new Run(varName + " = " + varValue + "\n");
-                    debugWindow.AddToVariables(option);
+                    SaveFile();
                 }
-            });
 
-            debugWindow.ShowDialog();
+                //Opens a debugging command dialog when Ctrl + Space is pressed.
+                else if (e.Key == System.Windows.Input.Key.Space)
+                {
+                    DebugCommand debugWindow = new DebugCommand();
+
+                    //Handles code execution for the debug window.
+                    debugWindow.OnExecuteQuery += new Action<string>((a) =>
+                    {
+                        bool isACommand = true;
+
+                        //Attempts to process the command as normal otherwise.
+                        ParseNode textNode = new ParseNode();
+                        textNode.Text = a;
+
+                        try
+                        {
+                            ProcessText(textNode);
+                        }
+
+                        //If not a valid header or normal command, it is bad.
+                        catch (Exception ex)
+                        {
+                            debugWindow.SetExecInfo("Command not understood. Error: " +
+                                ex.Message);
+
+                            isACommand = false;
+                        }
+
+                        if (isACommand)
+                        {
+                            debugWindow.SetExecInfo("Command executed.");
+                            debugWindow.RefreshLists();
+                        }
+                    });
+
+                    //Handles populating the list of forks for the debug window.
+                    debugWindow.OnLoadForks += new Action(() =>
+                    {
+                        debugWindow.ClearForks();
+                        List<string> forkNames = Entries.Keys.ToList();
+
+                        foreach (string name in forkNames)
+                        {
+                            Run option = new Run(name + "\n");
+
+                            //Highlights forks under the mouse.
+                            option.MouseEnter += new System.Windows.Input.MouseEventHandler((a, b) =>
+                            {
+                                option.Background = Brushes.AliceBlue;
+                            });
+
+                            option.MouseLeave += new System.Windows.Input.MouseEventHandler((a, b) =>
+                            {
+                                option.Background = Brushes.White;
+                            });
+
+                            //Navigates to a fork when clicked.
+                            option.MouseDown += new System.Windows.Input.MouseButtonEventHandler((a, b) =>
+                            {
+                                SetFork(name);
+                                debugWindow.RefreshLists();
+                            });
+
+                            debugWindow.AddToForks(option);
+                        }
+                    });
+
+                    //Handles populating the list of variables for the debug window.
+                    debugWindow.OnLoadVariables += new Action(() =>
+                    {
+                        debugWindow.ClearVariables();
+                        var varNames = _variables;
+
+                        for (int i = 0; i < varNames.Count; i++)
+                        {
+                            string varName = varNames.Keys.ElementAt(i);
+                            string varValue = varNames.Values.ElementAt(i).ToString();
+                            Run option = new Run(varName + " = " + varValue + "\n");
+                            debugWindow.AddToVariables(option);
+                        }
+                    });
+
+                    debugWindow.ShowDialog();
+                }
+
+                //Prompts to save the game state when Ctrl + Back is pressed.
+                else if (e.Key == System.Windows.Input.Key.Back)
+                {
+                    Log logWindow = new Log(_console);
+
+                    //Reads logs from the console.
+                    var logs = _console.GetLog();
+                    for (int i = 0; i < logs.Count; i++)
+                    {
+                        if (logs[i].Item1 == LogTypes.Input)
+                        {
+                            logWindow.LogInput(logs[i].Item2);
+                        }
+                        else if (logs[i].Item1 == LogTypes.Output)
+                        {
+                            logWindow.LogOutput(logs[i].Item2);
+                        }
+                    }
+
+                    logWindow.Show();
+                }
+            }
         }
 
         /// <summary>
@@ -277,6 +459,8 @@ namespace AdventureText.Parsing
         public void SetEntries(Dictionary<string, ParseNode> entries,
             string forkToLoad)
         {
+            _console.ClearLog(); //Empties the log.
+
             _entries = entries;
             if (_entries.Count == 0)
             {
@@ -404,6 +588,13 @@ namespace AdventureText.Parsing
                 return;
             }
 
+            //Records the previous state of all variables.
+            _prevVariables.Clear();
+            for (int i = 0; i < _variables.Count; i++)
+            {
+                _prevVariables.Add(_variables.Keys.ElementAt(i), _variables.Values.ElementAt(i));
+            }
+
             //Evaluates every node.
             PreorderProcess(tree, String.Empty);
 
@@ -422,6 +613,7 @@ namespace AdventureText.Parsing
                 _console.AddOption(_optOptionDefault, new Action(() =>
                 {
                     _variables.Clear();
+                    _console.ClearLog();
                     SetFork(_entries.Keys.ElementAt(0));
                 }));
             }
@@ -953,8 +1145,8 @@ namespace AdventureText.Parsing
                                 _console.Clear();
                                 _console.PrefOutColor = Brushes.Yellow;
 
-                                if (ex is Parsing.ParserException ||
-                                    ex is Parsing.InterpreterException)
+                                if (ex is ParserException ||
+                                    ex is InterpreterException)
                                 {
                                     _console.AddText("\nA loading error occurred. " + ex.Message);
                                 }
@@ -1051,7 +1243,19 @@ namespace AdventureText.Parsing
                             new MathParsing.LiteralId(varName, varValBool));
                     }
                 }
-                //TODO: Adds "visited" as a variable.
+
+                //Registers a function to check if a variable exists.
+                MathParsing.Parser.AddFunction(new MathParsing.Function("exists", 1,
+                    new Func<MathParsing.Token[], MathParsing.Token>((num) =>
+                    {
+                        if (num[0] is MathParsing.LiteralBool boolVal)
+                        {
+                            return boolVal;
+                        }
+
+                        return new MathParsing.LiteralBool(
+                            !(num[0] is MathParsing.LiteralId));
+                    })));
 
                 string result = "";
                 object resultVal = null;
@@ -1531,6 +1735,19 @@ namespace AdventureText.Parsing
                                 new MathParsing.LiteralId(varName, varValBool));
                         }
                     }
+
+                    //Registers a function to set a random number.
+                    MathParsing.Parser.AddFunction(new MathParsing.Function("random", 1,
+                        new Func<MathParsing.Token[], MathParsing.Token>((num) =>
+                        {
+                            if (num[0] is MathParsing.LiteralNum n0)
+                            {
+                                return new MathParsing.LiteralNum(
+                                    _rng.Next((int)n0.Value) + 1);
+                            }
+
+                            return null;
+                        })));
 
                     //Gets the index to separate left and right-hand sides.
                     int exprTwoSidedIndex = Array.IndexOf(words, "=");
@@ -2190,13 +2407,12 @@ namespace AdventureText.Parsing
         }
 
         /// <summary>
-        /// Automatically sets variables to indicate pages were visited.
+        /// Called when a fork is finished executing or is stopped so
+        /// another fork can run, in which this should execute immediately.
         /// </summary>
         private void VisitFork()
         {
-            //Called when a fork is finished executing or is stopped so
-            //another fork can run, in which this should execute
-            //immediately.
+            // Automatically sets variables to indicate pages were visited.
             if (!_variables.ContainsKey("visited" + _fork))
             {
                 _variables.Add("visited" + _fork, true);

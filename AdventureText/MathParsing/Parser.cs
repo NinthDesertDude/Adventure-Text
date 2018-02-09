@@ -1591,7 +1591,8 @@ namespace AdventureText.MathParsing
                 for (int i = 0; i < args.Count; i++)
                 {
                     List<Token> subResult = EvalNoPar(args[i], null);
-                    if (subResult.FirstOrDefault() is LiteralNum)
+                    if (subResult.FirstOrDefault() is LiteralNum ||
+                        subResult.FirstOrDefault() is LiteralBool)
                     {
                         argVals[i] = subResult[0];
                     }
