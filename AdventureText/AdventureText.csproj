@@ -68,6 +68,23 @@
     <Compile Include="DebugCommandGui.xaml.cs">
       <DependentUpon>DebugCommandGui.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Log.cs" />
+    <Compile Include="LogGui.xaml.cs">
+      <DependentUpon>LogGui.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="LogTypes.cs" />
+    <Compile Include="MathParsing\Associativity.cs" />
+    <Compile Include="MathParsing\Fraction.cs" />
+    <Compile Include="MathParsing\Function.cs" />
+    <Compile Include="MathParsing\LiteralBool.cs" />
+    <Compile Include="MathParsing\LiteralId.cs" />
+    <Compile Include="MathParsing\LiteralNum.cs" />
+    <Compile Include="MathParsing\Operator.cs" />
+    <Compile Include="MathParsing\Parser.cs" />
+    <Compile Include="MathParsing\ParsingException.cs" />
+    <Compile Include="MathParsing\Placements.cs" />
+    <Compile Include="MathParsing\Symbol.cs" />
+    <Compile Include="MathParsing\Token.cs" />
     <Compile Include="Parsing\Interpreter.cs" />
     <Compile Include="Parsing\InterpreterException.cs" />
     <Compile Include="Parsing\ParseNode.cs" />
@@ -113,6 +130,10 @@
       <Generator>MSBuild:Compile</Generator>
     </Page>
     <Page Include="DebugCommandGui.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="LogGui.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>

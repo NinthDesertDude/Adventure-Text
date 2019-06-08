@@ -6,6 +6,7 @@ using System.Media;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Documents;
+using System.Windows.Forms;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -80,9 +81,20 @@ namespace AdventureText.Parsing
         private Dictionary<string, object> _variables;
 
         /// <summary>
+        /// Stores a copy of all variables as they were just before visiting
+        /// a new page. This is used when saving.
+        /// </summary>
+        private Dictionary<string, object> _prevVariables;
+
+        /// <summary>
         /// Used to stop evaluation of the current fork entirely.
         /// </summary>
         private bool _stopEvaluation;
+
+        /// <summary>
+        /// Stores the most recent save URL for future saves.
+        /// </summary>
+        private string _saveLocation;
         #endregion
 
         #region Properties
@@ -150,117 +162,287 @@ namespace AdventureText.Parsing
         /// </param>
         public Interpreter(Console console)
         {
-            _actions = new List<Console.OnSubmitHandler>();
             _console = console;
+            console.OnKeyDown += ProcessKeyboardShortcuts;
             _entries = new Dictionary<string, ParseNode>();
-            _fork = String.Empty;
-            _optLinkStyleHidden = false;
-            _optOptionDefault = "restart";
-            _optOptionEnabled = true;
             _rng = new Random();
-            _timers = new List<DispatcherTimer>();
-            _variables = new Dictionary<string, object>();
             _stopEvaluation = false;
-
-            console.OnKeyDown += OpenCommandDialog;
+            _saveLocation = "";
+            RefreshInterpreter();
         }
         #endregion
 
         #region Methods
         /// <summary>
-        /// Opens a command input dialog to process inputted commands.
+        /// Initializes or resets the interpreter states.
         /// </summary>
-        private void OpenCommandDialog(object sender,
-            System.Windows.Input.KeyEventArgs e)
+        private void RefreshInterpreter()
         {
-            //Exits unless Ctrl + Space is being pressed.
-            if ((!e.KeyboardDevice.IsKeyDown(System.Windows.Input.Key.LeftCtrl) &&
-                !e.KeyboardDevice.IsKeyDown(System.Windows.Input.Key.RightCtrl)) ||
-                e.Key != System.Windows.Input.Key.Space)
+            _actions = new List<Console.OnSubmitHandler>();
+            _fork = String.Empty;
+            _optLinkStyleHidden = false;
+            _optOptionDefault = "restart";
+            _optOptionEnabled = true;
+            _timers = new List<DispatcherTimer>();
+            _variables = new Dictionary<string, object>();
+            _prevVariables = new Dictionary<string, object>();
+        }
+
+        /// <summary>
+        /// Attempts to save the file to a user-specified location.
+        /// </summary>
+        private void SaveFile()
+        {
+            //Prompts for a save location if none is recorded.
+            if (!File.Exists(_saveLocation))
             {
-                return;
+                SaveFileDialog dlg = new SaveFileDialog();
+                dlg.CheckPathExists = true;
+                dlg.Title = "Save game";
+                dlg.Filter = "saved games|*.txtsav";
+                dlg.AddExtension = true;
+                if (dlg.ShowDialog() == DialogResult.OK)
+                {
+                    _saveLocation = dlg.FileName;
+                }
+                else
+                {
+                    return;
+                }
             }
 
-            DebugCommand debugWindow = new DebugCommand();
-
-            //Handles code execution for the debug window.
-            debugWindow.OnExecuteQuery += new Action<string>((a) =>
+            try
             {
-                bool isACommand = true;
+                using (FileStream fs = File.OpenWrite(_saveLocation))
+                {
+                    using (BinaryWriter bw = new BinaryWriter(fs))
+                    {
+                        //Writes the app version for backwards copmatibility.
+                        bw.Write(System.Diagnostics.FileVersionInfo.GetVersionInfo(
+                            System.Reflection.Assembly.GetExecutingAssembly()
+                            .Location).ProductVersion);
 
-                //Attempts to process the command as normal otherwise.
-                ParseNode textNode = new ParseNode();
-                textNode.Text = a;
+                        //Lists the current fork.
+                        bw.Write(_fork);
 
+                        //Records all variables and values.
+                        for (int i = 0; i < _prevVariables.Count; i++)
+                        {
+                            bw.Write(_prevVariables.Keys.ElementAt(i));
+
+                            //Each value is preceeded by a string to identify type.
+                            if (_prevVariables.Values.ElementAt(i) is bool boolVal)
+                            {
+                                bw.Write(boolVal.GetType().GUID.ToString());
+                                bw.Write(boolVal);
+                            }
+                            else if (_prevVariables.Values.ElementAt(i) is decimal decVal)
+                            {
+                                bw.Write(decVal.GetType().GUID.ToString());
+                                bw.Write(decVal);
+                            }
+                            else if (_prevVariables.Values.ElementAt(i) is string strVal)
+                            {
+                                bw.Write(strVal.GetType().GUID.ToString());
+                                bw.Write(strVal);
+                            }
+                        }
+
+                        bw.Flush();
+                    }
+                }
+            }
+            catch
+            {
+                System.Windows.MessageBox.Show("Couldn't save.");
+            }
+        }
+
+        /// <summary>
+        /// Attempts to load the user-specified file.
+        /// </summary>
+        private void LoadFile()
+        {
+            //Prompts for a load location.
+            OpenFileDialog dlg = new OpenFileDialog();
+            dlg.CheckFileExists = true;
+            dlg.CheckPathExists = true;
+            dlg.Title = "Load game";
+            dlg.Filter = "saved games|*.txtsav";
+            if (dlg.ShowDialog() == DialogResult.OK)
+            {
                 try
                 {
-                    ProcessText(textNode);
-                }
+                    using (FileStream fs = File.OpenRead(dlg.FileName))
+                    {
+                        using (BinaryReader br = new BinaryReader(fs))
+                        {
+                            //Resets the interpreter.
+                            RefreshInterpreter();
 
-                //If not a valid header or normal command, it is bad.
-                catch (Exception ex)
+                            br.ReadString(); //Version
+                            string fork = br.ReadString();
+
+                            //Reads all variables.
+                            while (fs.Position < fs.Length - 1)
+                            {
+                                string varName = br.ReadString();
+                                string typeGuid = br.ReadString();
+
+                                if (typeGuid == typeof(bool).GUID.ToString())
+                                {
+                                    _variables.Add(varName, br.ReadBoolean());
+                                }
+                                else if (typeGuid == typeof(decimal).GUID.ToString())
+                                {
+                                    _variables.Add(varName, br.ReadDecimal());
+                                }
+                                else if (typeGuid == typeof(string).GUID.ToString())
+                                {
+                                    _variables.Add(varName, br.ReadString());
+                                }
+                            }
+
+                            SetFork(fork);
+                        }
+                    }
+                }
+                catch
                 {
-                    debugWindow.SetExecInfo("Command not understood. Error: " +
-                        ex.Message);
-
-                    isACommand = false;
+                    System.Windows.MessageBox.Show("Couldn't load.");
                 }
+            }
+        }
 
-                if (isACommand)
-                {
-                    debugWindow.SetExecInfo("Command executed.");
-                    debugWindow.RefreshLists();
-                }
-            });
-
-            //Handles populating the list of forks for the debug window.
-            debugWindow.OnLoadForks += new Action(() =>
+        /// <summary>
+        /// Handles all keyboard shortcuts.
+        /// </summary>
+        private void ProcessKeyboardShortcuts(object sender,
+            System.Windows.Input.KeyEventArgs e)
+        {
+            //Keyboard shortcuts based on holding down Ctrl.
+            if (e.KeyboardDevice.IsKeyDown(System.Windows.Input.Key.LeftCtrl) ||
+                e.KeyboardDevice.IsKeyDown(System.Windows.Input.Key.RightCtrl))
             {
-                debugWindow.ClearForks();
-                List<string> forkNames = Entries.Keys.ToList();
-
-                foreach (string name in forkNames)
+                //Prompts to load a saved file when Ctrl + O is pressed.
+                if (e.Key == System.Windows.Input.Key.O)
                 {
-                    Run option = new Run(name + "\n");
-
-                    //Highlights forks under the mouse.
-                    option.MouseEnter += new System.Windows.Input.MouseEventHandler((a, b) =>
-                    {
-                        option.Background = Brushes.AliceBlue;
-                    });
-
-                    option.MouseLeave += new System.Windows.Input.MouseEventHandler((a, b) =>
-                    {
-                        option.Background = Brushes.White;
-                    });
-
-                    //Navigates to a fork when clicked.
-                    option.MouseDown += new System.Windows.Input.MouseButtonEventHandler((a, b) =>
-                    {
-                        SetFork(name);
-                        debugWindow.RefreshLists();
-                    });
-
-                    debugWindow.AddToForks(option);
+                    LoadFile();
                 }
-            });
 
-            //Handles populating the list of variables for the debug window.
-            debugWindow.OnLoadVariables += new Action(() =>
-            {
-                debugWindow.ClearVariables();
-                var varNames = _variables;
-
-                for (int i = 0; i < varNames.Count; i++)
+                //Prompts to save the game state when Ctrl + S is pressed.
+                else if (e.Key == System.Windows.Input.Key.S)
                 {
-                    string varName = varNames.Keys.ElementAt(i);
-                    string varValue = varNames.Values.ElementAt(i).ToString();
-                    Run option = new Run(varName + " = " + varValue + "\n");
-                    debugWindow.AddToVariables(option);
+                    SaveFile();
                 }
-            });
 
-            debugWindow.ShowDialog();
+                //Opens a debugging command dialog when Ctrl + Space is pressed.
+                else if (e.Key == System.Windows.Input.Key.Space)
+                {
+                    DebugCommand debugWindow = new DebugCommand();
+
+                    //Handles code execution for the debug window.
+                    debugWindow.OnExecuteQuery += new Action<string>((a) =>
+                    {
+                        bool isACommand = true;
+
+                        //Attempts to process the command as normal otherwise.
+                        ParseNode textNode = new ParseNode();
+                        textNode.Text = a;
+
+                        try
+                        {
+                            ProcessText(textNode);
+                        }
+
+                        //If not a valid header or normal command, it is bad.
+                        catch (Exception ex)
+                        {
+                            debugWindow.SetExecInfo("Command not understood. Error: " +
+                                ex.Message);
+
+                            isACommand = false;
+                        }
+
+                        if (isACommand)
+                        {
+                            debugWindow.SetExecInfo("Command executed.");
+                            debugWindow.RefreshLists();
+                        }
+                    });
+
+                    //Handles populating the list of forks for the debug window.
+                    debugWindow.OnLoadForks += new Action(() =>
+                    {
+                        debugWindow.ClearForks();
+                        List<string> forkNames = Entries.Keys.ToList();
+
+                        foreach (string name in forkNames)
+                        {
+                            Run option = new Run(name + "\n");
+
+                            //Highlights forks under the mouse.
+                            option.MouseEnter += new System.Windows.Input.MouseEventHandler((a, b) =>
+                            {
+                                option.Background = Brushes.AliceBlue;
+                            });
+
+                            option.MouseLeave += new System.Windows.Input.MouseEventHandler((a, b) =>
+                            {
+                                option.Background = Brushes.White;
+                            });
+
+                            //Navigates to a fork when clicked.
+                            option.MouseDown += new System.Windows.Input.MouseButtonEventHandler((a, b) =>
+                            {
+                                SetFork(name);
+                                debugWindow.RefreshLists();
+                            });
+
+                            debugWindow.AddToForks(option);
+                        }
+                    });
+
+                    //Handles populating the list of variables for the debug window.
+                    debugWindow.OnLoadVariables += new Action(() =>
+                    {
+                        debugWindow.ClearVariables();
+                        var varNames = _variables;
+
+                        for (int i = 0; i < varNames.Count; i++)
+                        {
+                            string varName = varNames.Keys.ElementAt(i);
+                            string varValue = varNames.Values.ElementAt(i).ToString();
+                            Run option = new Run(varName + " = " + varValue + "\n");
+                            debugWindow.AddToVariables(option);
+                        }
+                    });
+
+                    debugWindow.ShowDialog();
+                }
+
+                //Prompts to save the game state when Ctrl + Back is pressed.
+                else if (e.Key == System.Windows.Input.Key.Back)
+                {
+                    Log logWindow = new Log(_console);
+
+                    //Reads logs from the console.
+                    var logs = _console.GetLog();
+                    for (int i = 0; i < logs.Count; i++)
+                    {
+                        if (logs[i].Item1 == LogTypes.Input)
+                        {
+                            logWindow.LogInput(logs[i].Item2);
+                        }
+                        else if (logs[i].Item1 == LogTypes.Output)
+                        {
+                            logWindow.LogOutput(logs[i].Item2);
+                        }
+                    }
+
+                    logWindow.Show();
+                }
+            }
         }
 
         /// <summary>
@@ -277,6 +459,8 @@ namespace AdventureText.Parsing
         public void SetEntries(Dictionary<string, ParseNode> entries,
             string forkToLoad)
         {
+            _console.ClearLog(); //Empties the log.
+
             _entries = entries;
             if (_entries.Count == 0)
             {
@@ -404,6 +588,13 @@ namespace AdventureText.Parsing
                 return;
             }
 
+            //Records the previous state of all variables.
+            _prevVariables.Clear();
+            for (int i = 0; i < _variables.Count; i++)
+            {
+                _prevVariables.Add(_variables.Keys.ElementAt(i), _variables.Values.ElementAt(i));
+            }
+
             //Evaluates every node.
             PreorderProcess(tree, String.Empty);
 
@@ -422,6 +613,7 @@ namespace AdventureText.Parsing
                 _console.AddOption(_optOptionDefault, new Action(() =>
                 {
                     _variables.Clear();
+                    _console.ClearLog();
                     SetFork(_entries.Keys.ElementAt(0));
                 }));
             }
@@ -495,7 +687,7 @@ namespace AdventureText.Parsing
                         "'if " + condition + "' is incorrectly formatted.");
                 }
 
-                return false; //Ifs with invalid syntax are skipped.
+                return false; //Skips ifs with invalid syntax.
             }
 
             #region Timers. Syntax: if timer is num
@@ -953,8 +1145,8 @@ namespace AdventureText.Parsing
                                 _console.Clear();
                                 _console.PrefOutColor = Brushes.Yellow;
 
-                                if (ex is Parsing.ParserException ||
-                                    ex is Parsing.InterpreterException)
+                                if (ex is ParserException ||
+                                    ex is InterpreterException)
                                 {
                                     _console.AddText("\nA loading error occurred. " + ex.Message);
                                 }
@@ -1020,333 +1212,89 @@ namespace AdventureText.Parsing
             }
             #endregion
 
-            #region if visited, if!visited, if name, if !name
-            //Handles syntax: if visited, if !visited, if name, if !name.
-            else if (words.Length == 1)
+            #region Truth tests. Syntax: if expr; expr must be true or false.
+            else
             {
-                //Stores the variable to check.
-                string key;
+                //Unregisters previously-set variables and confirms options.
+                MathParsing.Parser.OptUseImplicitMult = false;
+                MathParsing.Parser.OptIncludeUnknowns = true;
+                MathParsing.Parser.OptUnknownDefault = new MathParsing.LiteralBool(false);
+                MathParsing.Parser.ResetTokens();
 
-                //Gets the word without the exclamation, if present.
-                if (words[0] == "visited" || words[0] == "!visited")
+                //Supports syntax: if visited, if !visited
+                MathParsing.Parser.AddIdentifier(
+                    new MathParsing.LiteralId("visited",
+                    _variables.ContainsKey("visited" + _fork)));
+
+                //Registers all valid variables with the math parser.
+                for (int i = 0; i < _variables.Count; i++)
                 {
-                    //The current page is always visited, so check if it's
-                    //been visited twice instead.
-                    key = "visited" + _fork;
+                    var varName = _variables.Keys.ElementAt(i);
+                    var varVal = _variables.Values.ElementAt(i);
+
+                    if (varVal is decimal varValDec)
+                    {
+                        MathParsing.Parser.AddIdentifier(
+                            new MathParsing.LiteralId(varName, varValDec));
+                    }
+                    else if (varVal is bool varValBool)
+                    {
+                        MathParsing.Parser.AddIdentifier(
+                            new MathParsing.LiteralId(varName, varValBool));
+                    }
                 }
-                else if (words[0].StartsWith("!"))
+
+                //Registers a function to check if a variable exists.
+                MathParsing.Parser.AddFunction(new MathParsing.Function("exists", 1,
+                    new Func<MathParsing.Token[], MathParsing.Token>((num) =>
+                    {
+                        if (num[0] is MathParsing.LiteralBool boolVal)
+                        {
+                            return boolVal;
+                        }
+
+                        return new MathParsing.LiteralBool(
+                            !(num[0] is MathParsing.LiteralId));
+                    })));
+
+                string result = "";
+                object resultVal = null;
+
+                //Attempts to compute the expression.
+                try
                 {
-                    key = words[0].Substring(1);
+                    result = MathParsing.Parser.Eval(String.Join(" ", words));
+                }
+                catch (MathParsing.ParsingException e)
+                {
+                    if (ShowErrors)
+                    {
+                        throw new InterpreterException("Interpreter " + e.Message);
+                    }
+
+                    return false;
+                }
+
+                //Parses the computed result as a bool.
+                if (result == "True" || result == "False")
+                {
+                    return bool.Parse(result);
                 }
                 else
                 {
-                    key = words[0];
-                }
-
-                //If the boolean variable has the right value, return true.
-                if (_variables.ContainsKey(key))
-                {
-                    object value = _variables[key];
-                    if (value is bool)
-                    {
-                        if ((bool)value == !(words[0].StartsWith("!")))
-                        {
-                            return true;
-                        }
-
-                        return false;
-                    }
-
                     if (ShowErrors)
                     {
-                        throw new InterpreterException("Interpreter: " +
-                            "Variable '" + key + "' is numeric and cannot " +
-                            "be converted to a boolean (true or false) type.");
+                        throw new InterpreterException(
+                            "Interpreter: In the line 'if " +
+                            String.Join(" ", words) + "', the expression must " +
+                            "be boolean (true or false), but was " +
+                            resultVal.GetType().ToString() + " instead.");
                     }
 
                     return false;
                 }
-
-                //Negative if checks are true when var doesn't exist.
-                return words[0].StartsWith("!");
             }
             #endregion
-
-            #region if visited name, if !visited name
-            //Handles syntax: if visited name, if !visited name.
-            else if (words.Length == 2 &&
-                (words[0] == "visited" || words[0] == "!visited"))
-            {
-                //Gets the fork name. Case and space insensitive.
-                string forkName = String.Empty;
-                for (int i = 1; i < words.Length; i++)
-                {
-                    forkName += words[i];
-                }
-                forkName = forkName.Replace(" ", String.Empty).ToLower();
-
-                //Gets the visited key corresponding to the page.
-                string key = "visited" + forkName;
-
-                if (_variables.ContainsKey(key))
-                {
-                    object value = _variables[key];
-                    if (value is bool)
-                    {
-                        if ((bool)value == (words[0] == "visited"))
-                        {
-                            return true;
-                        }
-
-                        return false;
-                    }
-
-                    if (ShowErrors)
-                    {
-                        throw new InterpreterException("Interpreter: " +
-                            "Variable '" + key + "' is numeric and cannot " +
-                            "be converted to a boolean (true or false) type.");
-                    }
-
-                    return false;
-                }
-
-                //Negative if checks are true when var doesn't exist.
-                return words[0].StartsWith("!");
-            }
-            #endregion
-
-            #region if name = name, if name OP num. OP: =, !=, <, <=, >, >=.
-            //Handles syntax: if name = name. if name OP num.
-            //OP: =, !=, <, <=, >, >=.
-            else if (words.Length == 3)
-            {
-                bool isNumber = false;
-                double number;
-
-                //Determines which syntax is used by checking the third word.
-                if (Double.TryParse(words[2], out number))
-                {
-                    if (Double.IsInfinity(number) || Double.IsNaN(number))
-                    {
-                        if (ShowErrors)
-                        {
-                            throw new InterpreterException("Interpreter: In " +
-                                "line '" + condition + "', the number " +
-                                "can't be too large.");
-                        }
-
-                        return false;
-                    }
-
-                    isNumber = true;
-                }
-
-                if (!isNumber)
-                {
-                    object value1 = null;
-                    object value2 = null;
-
-                    //Gets the variable values if they exist.
-                    if (_variables.ContainsKey(words[0]))
-                    {
-                        value1 = _variables[words[0]];
-                    }
-                    if (_variables.ContainsKey(words[2]))
-                    {
-                        value2 = _variables[words[2]];
-                    }
-
-                    //If the variables don't both exist.
-                    if (value1 == null || value2 == null)
-                    {
-                        if (ShowErrors)
-                        {
-                            throw new InterpreterException("Interpreter: '" +
-                                "In line '" + condition + "', one or both " +
-                                "of the named variables does not exist.");
-                        }
-
-                        return false;
-                    }
-
-                    //If the variables are both doubles, checks them.
-                    if ((value1 is double) && (value2 is double))
-                    {
-                        switch (words[1])
-                        {
-                            case ("="):
-                                if ((double)value1 == (double)value2)
-                                {
-                                    return true;
-                                }
-                                break;
-                            case ("!="):
-                                if ((double)value1 != (double)value2)
-                                {
-                                    return true;
-                                }
-                                break;
-                            case ("<"):
-                                if ((double)value1 < (double)value2)
-                                {
-                                    return true;
-                                }
-                                break;
-                            case (">"):
-                                if ((double)value1 > (double)value2)
-                                {
-                                    return true;
-                                }
-                                break;
-                            case ("<="):
-                                if ((double)value1 <= (double)value2)
-                                {
-                                    return true;
-                                }
-                                break;
-                            case (">="):
-                                if ((double)value1 >= (double)value2)
-                                {
-                                    return true;
-                                }
-                                break;
-                            default:
-                                if (ShowErrors)
-                                {
-                                    throw new InterpreterException(
-                                        "Interpreter: unknown operator '" +
-                                        words[1] + "' in 'if " + condition +
-                                        "'.");
-                                }
-                                break;
-                        }
-
-                        return false;
-                    }
-                    else if ((value1 is bool) && (value2 is bool))
-                    {
-                        switch (words[1])
-                        {
-                            case ("="):
-                                if ((bool)value1 == (bool)value2)
-                                {
-                                    return true;
-                                }
-                                break;
-                            case ("!="):
-                                if ((bool)value1 != (bool)value2)
-                                {
-                                    return true;
-                                }
-                                break;
-                            default:
-                                if (ShowErrors)
-                                {
-                                    throw new InterpreterException(
-                                        "Interpreter: unknown operator '" +
-                                        words[1] + "' in 'if " + condition +
-                                        "'.");
-                                }
-                                break;
-                        }
-
-                        return false;
-                    }
-                    else
-                    {
-                        if (ShowErrors)
-                        {
-                            throw new InterpreterException("Interpreter: In " +
-                                "the line '" + condition + "', one variable " +
-                                "is true or false and one is numeric, so " +
-                                "they can't be compared.");
-                        }
-
-                        return false;
-                    }
-                }
-
-                //Returns true if the variable OP number is true.
-                else if (_variables.ContainsKey(words[0]))
-                {
-                    object value = _variables[words[0]];
-                    if (value is double)
-                    {
-                        switch (words[1])
-                        {
-                            case ("="):
-                                if ((double)value == number)
-                                {
-                                    return true;
-                                }
-                                break;
-                            case ("!="):
-                                if ((double)value != number)
-                                {
-                                    return true;
-                                }
-                                break;
-                            case ("<"):
-                                if ((double)value < number)
-                                {
-                                    return true;
-                                }
-                                break;
-                            case (">"):
-                                if ((double)value > number)
-                                {
-                                    return true;
-                                }
-                                break;
-                            case ("<="):
-                                if ((double)value <= number)
-                                {
-                                    return true;
-                                }
-                                break;
-                            case (">="):
-                                if ((double)value >= number)
-                                {
-                                    return true;
-                                }
-                                break;
-                            default:
-                                if (ShowErrors)
-                                {
-                                    throw new InterpreterException(
-                                        "Interpreter: unknown operator '" +
-                                        words[1] + "' in 'if " + condition +
-                                        "'.");
-                                }
-                                break;
-                        }
-
-                        return false;
-                    }
-
-                    if (ShowErrors)
-                    {
-                        throw new InterpreterException("Interpreter: " +
-                            "Variable '" + words[0] + "' is boolean (true or " +
-                            "false) and cannot be converted to a numeric type.");
-                    }
-
-                    return false;
-                }
-
-                return false; //Execution of child nodes is conditional.
-            }
-            #endregion
-
-            //Unknown syntaxes are automatically false.
-            if (ShowErrors)
-            {
-                throw new InterpreterException("Interpreter: unknown " +
-                    "syntax on line '" + condition + "'.");
-            }
-
-            return false;
         }
 
         /// <summary>
@@ -1386,98 +1334,82 @@ namespace AdventureText.Parsing
                 }
                 #endregion
 
-                #region Parse in-line options. Syntax: link@ output@forkname.
-                else if (textLeft.StartsWith("link@"))
+                #region Parse in-line options. Syntax: output@@forkname.
+                else if (line.Contains("@@"))
                 {
-                    line = line.Substring(5);
+                    //Gets the fork name. Case and space insensitive.
+                    string forkName = line
+                        .Substring(line.IndexOf('@') + 2)
+                        .Replace(" ", String.Empty)
+                        .ToLower();
 
-                    if (line.Contains('@'))
+                    string displayName = line
+                        .Substring(0, line.IndexOf('@'))
+                        .Trim()
+                        .Replace(@"\at", "@")
+                        .Replace(@"\n", "\n")
+                        .Replace(@"\s", @"\");
+
+                    //Handles having no hyperlink or display name.
+                    if (forkName.Trim() == String.Empty && ShowErrors)
                     {
-                        //Gets the fork name. Case and space insensitive.
-                        string forkName = line
-                            .Substring(line.IndexOf('@') + 1)
-                            .Replace(" ", String.Empty)
-                            .ToLower();
-
-                        string displayName = line
-                            .Substring(0, line.IndexOf('@'))
-                            .Trim()
-                            .Replace(@"\at", "@")
-                            .Replace(@"\n", "\n")
-                            .Replace(@"\s", @"\");
-
-                        //Handles having no hyperlink or display name.
-                        if (forkName.Trim() == String.Empty && ShowErrors)
-                        {
-                            throw new InterpreterException("Interpreter: " +
-                            "there was no fork name given to option '" +
-                            displayName + "'.");
-                        }
-                        else if (displayName.Trim() == String.Empty && ShowErrors)
-                        {
-                            throw new InterpreterException("Interpreter: " +
-                            "the option linking to '" + forkName + "' has no " +
-                            "displayable text specified.");
-                        }
-                        else if (!_entries.Keys.Contains(forkName) && ShowErrors)
-                        {
-                            throw new InterpreterException("Interpreter: " +
-                                "The fork in the option '" + displayName +
-                                "@" + forkName + "' doesn't exist.");
-                        }
-                        else
-                        {
-                            //Creates a hyperlink option for the console's
-                            //output text rather than options.
-                            Run generatedRun = new Run(displayName);
-                            generatedRun.Foreground = _console.PrefOptColor;
-                            generatedRun.FontFamily = _console.PrefOptFontFamily;
-                            generatedRun.FontSize = _console.PrefOptFontSize;
-                            generatedRun.FontWeight = _console.PrefOptFontWeight;
-
-                            //Sets the color.
-
-                            //If the in-line options should be styled like
-                            //options, captures colors to local variables to
-                            //keep them constant.
-                            if (_optLinkStyleHidden)
-                            {
-                                generatedRun.Foreground = _console.PrefOutColor;
-                            }
-                            else
-                            {
-                                Brush optHgltColor = _console.PrefOptHighlightColor;
-                                Brush optColor = _console.PrefOptColor;
-
-                                //Changes color in response to mouse.
-                                generatedRun.MouseEnter += (a, b) =>
-                                {
-                                    generatedRun.Foreground = optHgltColor;
-                                };
-                                generatedRun.MouseLeave += (a, b) =>
-                                {
-                                    generatedRun.Foreground = optColor;
-                                };
-                            }
-
-                            //Responds to clicks.
-                            generatedRun.MouseLeftButtonDown += (a, b) =>
-                            {
-                                SetFork(forkName);
-                            };
-
-                            //Adds to options.
-                            _console.AddText(generatedRun);
-                        }
+                        throw new InterpreterException("Interpreter: " +
+                        "there was no fork name given to option '" +
+                        displayName + "'.");
+                    }
+                    else if (displayName.Trim() == String.Empty && ShowErrors)
+                    {
+                        throw new InterpreterException("Interpreter: " +
+                        "the option linking to '" + forkName + "' has no " +
+                        "displayable text specified.");
+                    }
+                    else if (!_entries.Keys.Contains(forkName) && ShowErrors)
+                    {
+                        throw new InterpreterException("Interpreter: " +
+                            "The fork in the option '" + displayName +
+                            "@" + forkName + "' doesn't exist.");
                     }
                     else
                     {
-                        if (ShowErrors)
+                        //Creates a hyperlink option for the console's
+                        //output text rather than options.
+                        Run generatedRun = new Run(displayName);
+                        generatedRun.Foreground = _console.PrefOptColor;
+                        generatedRun.FontFamily = _console.PrefOptFontFamily;
+                        generatedRun.FontSize = _console.PrefOptFontSize;
+                        generatedRun.FontWeight = _console.PrefOptFontWeight;
+
+                        //If the in-line options should be styled like
+                        //options, captures colors to local variables to
+                        //keep them constant.
+                        if (_optLinkStyleHidden)
                         {
-                            throw new InterpreterException("Interpreter: " +
-                                "In the line '" + line + "', an option " +
-                                "must be specified.");
+                            generatedRun.Foreground = _console.PrefOutColor;
                         }
+                        else
+                        {
+                            Brush optHgltColor = _console.PrefOptHighlightColor;
+                            Brush optColor = _console.PrefOptColor;
+
+                            //Changes color in response to mouse.
+                            generatedRun.MouseEnter += (a, b) =>
+                            {
+                                generatedRun.Foreground = optHgltColor;
+                            };
+                            generatedRun.MouseLeave += (a, b) =>
+                            {
+                                generatedRun.Foreground = optColor;
+                            };
+                        }
+
+                        //Responds to clicks.
+                        generatedRun.MouseLeftButtonDown += (a, b) =>
+                        {
+                            SetFork(forkName);
+                        };
+
+                        //Adds to options.
+                        _console.AddText(generatedRun);
                     }
 
                     //Deletes the line just processed.
@@ -1506,14 +1438,14 @@ namespace AdventureText.Parsing
                     if (forkName.Trim() == String.Empty && ShowErrors)
                     {
                         throw new InterpreterException("Interpreter: " +
-                        "there was no fork name given to option '" +
-                        displayName + "'.");
+                            "there was no fork name given to option '" +
+                            displayName + "'.");
                     }
                     else if (displayName.Trim() == String.Empty && ShowErrors)
                     {
                         throw new InterpreterException("Interpreter: " +
-                        "the option linking to '" + forkName + "' has no " +
-                        "displayable text specified.");
+                            "the option linking to '" + forkName + "' has no " +
+                            "displayable text specified.");
                     }
                     else if (!_entries.Keys.Contains(forkName) && ShowErrors)
                     {
@@ -1526,7 +1458,7 @@ namespace AdventureText.Parsing
                         //When clicked, the option changes the fork.
                         _console.AddOption(displayName, new Action(() =>
                         {
-                                SetFork(forkName);
+                            SetFork(forkName);
                         }));
                     }
 
@@ -1755,7 +1687,7 @@ namespace AdventureText.Parsing
 
                             _console.AddText(generatedRun);
                         });
-                        
+
                         timer.Start();
                     }
                     else if (ShowErrors)
@@ -1779,180 +1711,266 @@ namespace AdventureText.Parsing
                 #endregion
 
                 #region Set variables.
-                //Syntax: set name, set !name,
-                //set name OP name. OP is =, +=, +, -=, or -.
-                //set name OP num. OP is =, +=, +, -=, or -.
-                //set name random num.
                 else if (textLeft.StartsWith("set"))
                 {
-                    if (words.Length == 4)
-                    {
-                        bool isNumber = false;
-                        double number;
+                    //Unregisters previously-set variables.
+                    MathParsing.Parser.OptUseImplicitMult = false;
+                    MathParsing.Parser.OptIncludeUnknowns = false;
+                    MathParsing.Parser.ResetTokens();
 
-                        //Checks the 4th word to determine the syntax used.
-                        if (Double.TryParse(words[3], out number))
+                    //Registers all valid variables with the math parser.
+                    for (int i = 0; i < _variables.Count; i++)
+                    {
+                        var varName = _variables.Keys.ElementAt(i);
+                        var varVal = _variables.Values.ElementAt(i);
+
+                        if (varVal is decimal varValDec)
                         {
-                            if (Double.IsInfinity(number) || Double.IsNaN(number))
+                            MathParsing.Parser.AddIdentifier(
+                                new MathParsing.LiteralId(varName, varValDec));
+                        }
+                        else if (varVal is bool varValBool)
+                        {
+                            MathParsing.Parser.AddIdentifier(
+                                new MathParsing.LiteralId(varName, varValBool));
+                        }
+                    }
+
+                    //Registers a function to set a random number.
+                    MathParsing.Parser.AddFunction(new MathParsing.Function("random", 1,
+                        new Func<MathParsing.Token[], MathParsing.Token>((num) =>
+                        {
+                            if (num[0] is MathParsing.LiteralNum n0)
+                            {
+                                return new MathParsing.LiteralNum(
+                                    _rng.Next((int)n0.Value) + 1);
+                            }
+
+                            return null;
+                        })));
+
+                    //Gets the index to separate left and right-hand sides.
+                    int exprTwoSidedIndex = Array.IndexOf(words, "=");
+
+                    //Handles expressions with both LHS and RHS.
+                    if (exprTwoSidedIndex != -1)
+                    {
+                        string[] lhs = words.Skip(1).Take(exprTwoSidedIndex - 1).ToArray();
+                        string[] rhs = words.Skip(exprTwoSidedIndex + 1).ToArray();
+                        string result = "";
+                        object resultVal = null;
+
+                        //If the left-hand side is a single word.
+                        if (lhs.Length == 1)
+                        {
+                            //Attempts to compute the RHS expression.
+                            try
+                            {
+                                result = MathParsing.Parser.Eval(String.Join(" ", rhs));
+                            }
+                            catch (MathParsing.ParsingException e)
                             {
                                 if (ShowErrors)
                                 {
                                     throw new InterpreterException(
                                         "Interpreter: In the line '" + line +
-                                        "', the number can't be too large.");
+                                        "', " + e.Message);
                                 }
-
-                                //Deletes the line being processed.
-                                if (endOfLine >= 0)
-                                {
-                                    textLeft = textLeft
-                                        .Substring(textLeft.IndexOf('\n') + 1);
-                                }
-                                else
-                                {
-                                    textLeft = String.Empty;
-                                }
-
-                                continue;
                             }
 
-                            isNumber = true;
-                        }
-
-                        //Creates the variable if it doesn't exist.
-                        if (!_variables.ContainsKey(words[1]))
-                        {
-                            _variables.Add(words[1], 0d);
-                        }
-
-                        //Handles set name OP name syntax.
-                        if (!isNumber)
-                        {
-                            if (_variables.ContainsKey(words[3]))
+                            //Parses the computed result as a bool.
+                            if (result == "True" || result == "False")
                             {
-                                //Handles set name = name syntax.
-                                if (words[2] == "=")
+                                resultVal = bool.Parse(result);
+                            }
+
+                            //Parses the computed result as a decimal.
+                            else
+                            {
+                                if (Decimal.TryParse(result, out decimal resultValDec))
                                 {
-                                    _variables[words[1]] =
-                                        _variables[words[3]];
+                                    resultVal = resultValDec;
                                 }
-                                else if (!(_variables[words[1]] is double) ||
-                                    !(_variables[words[3]] is double))
+                                else
                                 {
                                     if (ShowErrors)
                                     {
                                         throw new InterpreterException(
-                                            "Interpreter: both variables " +
-                                            "in '" + line + "' must be " +
-                                            "numeric to perform arithmetic.");
+                                            "Interpreter: In the line '" + line +
+                                            "', the expression " + String.Join(" ", rhs) +
+                                            " should be a number, but " + result +
+                                            " was computed instead.");
+                                    }
+                                }
+                            }
+
+                            //Sets or adds the new value as appropriate.
+                            if (_variables.ContainsKey(lhs[0]))
+                            {
+                                _variables[lhs[0]] = resultVal;
+                            }
+                            else
+                            {
+                                if (char.IsDigit(lhs[0][0]) ||
+                                    MathParsing.Parser.GetTokens().Any((o) => o.StrForm == lhs[0]))
+                                {
+                                    if (ShowErrors)
+                                    {
+                                        throw new InterpreterException(
+                                            "Interpreter: In the line '" + line +
+                                            "', the variable '" + lhs[0] +
+                                            "' is a name used for math or is a number.");
                                     }
                                 }
                                 else
                                 {
-                                    if (words[2] == "+" ||
-                                        words[2] == "+=")
+                                    _variables.Add(lhs[0], resultVal);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            if (ShowErrors)
+                            {
+                                throw new InterpreterException(
+                                    "Interpreter: In the line '" + line +
+                                    "', the phrase " + String.Join(" ", lhs) +
+                                    " must be a variable name without spaces.");
+                            }
+                        }
+                    }
+
+                    //Handles shorthand expressions with only the LHS.
+                    else
+                    {
+                        string[] lhs = words.Skip(1).ToArray();
+                        string result = "";
+                        object resultVal = null;
+
+                        if (lhs.Length > 0)
+                        {
+                            //Syntax: set name, set !name
+                            if (lhs.Length == 1)
+                            {
+                                //Sets false boolean values.
+                                if (lhs[0].StartsWith("!"))
+                                {
+                                    string lhsBool = lhs[0].Substring(1);
+
+                                    if (_variables.ContainsKey(lhsBool))
                                     {
-                                        _variables[words[1]] =
-                                            (double)_variables[words[1]] +
-                                            (double)_variables[words[3]];
+                                        _variables[lhsBool] = false;
                                     }
-                                    else if (words[2] == "-" ||
-                                        words[2] == "-=")
+                                    else if (lhs.Length > 0 && (char.IsDigit(lhs[0][0]) ||
+                                        MathParsing.Parser.GetTokens().Any((o) => o.StrForm == lhsBool)))
                                     {
-                                        _variables[words[1]] =
-                                            (double)_variables[words[1]] -
-                                            (double)_variables[words[3]];
+                                        if (ShowErrors)
+                                        {
+                                            throw new InterpreterException(
+                                                "Interpreter: In the line '" + line +
+                                                "', the variable '" + lhsBool +
+                                                "' is a number or is used for math.");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        _variables.Add(lhsBool, false);
+                                    }
+                                }
+
+                                //Sets true boolean values.
+                                else
+                                {
+                                    if (_variables.ContainsKey(lhs[0]))
+                                    {
+                                        _variables[lhs[0]] = true;
+                                    }
+                                    else if (lhs.Length > 0 && (char.IsDigit(lhs[0][0]) ||
+                                        MathParsing.Parser.GetTokens().Any((o) => o.StrForm == lhs[0])))
+                                    {
+                                        if (ShowErrors)
+                                        {
+                                            throw new InterpreterException(
+                                                "Interpreter: In the line '" + line +
+                                                "', the variable '" + lhs[0] +
+                                                "' is a name used for math or is a number.");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        _variables.Add(lhs[0], true);
+                                    }
+                                }
+                            }
+
+                            //Syntax: set EXPR, where EXPR is a math expression and not equation.
+                            //This is computed as set name = EXPR.
+                            else if (_variables.ContainsKey(lhs[0]))
+                            {
+                                //Attempts to compute the LHS expression.
+                                try
+                                {
+                                    result = MathParsing.Parser.Eval(String.Join(" ", lhs));
+                                }
+                                catch (MathParsing.ParsingException e)
+                                {
+                                    if (ShowErrors)
+                                    {
+                                        throw new InterpreterException(
+                                            "Interpreter: In the line '" + line +
+                                            "', " + e.Message);
+                                    }
+                                }
+
+                                //Parses the computed result as a bool.
+                                if (result == "True" || result == "False")
+                                {
+                                    resultVal = bool.Parse(result);
+                                }
+
+                                //Parses the computed result as a decimal.
+                                else
+                                {
+                                    if (Decimal.TryParse(result, out decimal resultValDec))
+                                    {
+                                        resultVal = resultValDec;
                                     }
                                     else
                                     {
                                         if (ShowErrors)
                                         {
                                             throw new InterpreterException(
-                                                "Interpreter: unknown " +
-                                                "operator '" + words[1] +
-                                                "' in '" + line + "'.");
+                                                "Interpreter: In the line '" + line +
+                                                "', the expression " + String.Join(" ", lhs) +
+                                                " should be a number, but " + result +
+                                                " was computed instead.");
                                         }
                                     }
                                 }
-                            }
-                            else if (ShowErrors)
-                            {
-                                throw new InterpreterException(
-                                    "Interpreter: variable '" +
-                                    words[3] + "' in '" + line +
-                                    "' does not exist.");
-                            }
-                        }
 
-                        //Handles set name OP num syntax.
-                        else
-                        {
-                            if (words[2] == "=")
-                            {
-                                _variables[words[1]] = number;
-                            }
-                            else if (!(_variables[words[1]] is double))
-                            {
-                                if (ShowErrors)
-                                {
-                                    throw new InterpreterException(
-                                        "Interpreter: variable '" + words[1] +
-                                        "' in '" + line + "' must be " +
-                                        "numeric to perform arithmetic.");
-                                }
-                            }
-                            else if (words[2] == "+=" || words[2] == "+")
-                            {
-                                _variables[words[1]] =
-                                    (double)_variables[words[1]] + number;
-                            }
-                            else if (words[2] == "-=" || words[2] == "-")
-                            {
-                                _variables[words[1]] =
-                                    (double)_variables[words[1]] - number;
-                            }
-                            else if (words[2] == "random")
-                            {
-                                _variables[words[1]] =
-                                    (double)_rng.Next((int)number) + 1;
+                                _variables[lhs[0]] = resultVal;
                             }
                             else
                             {
                                 if (ShowErrors)
                                 {
                                     throw new InterpreterException(
-                                        "Interpreter: unknown operator '" +
-                                        words[1] + "' in '" + line + "'.");
+                                        "Interpreter: In the line '" + line +
+                                        "', the variable " + lhs[0] + " doesn't " +
+                                        "exist yet.");
                                 }
                             }
                         }
-                    }
-                    //Syntax: set name, set !name
-                    else if (words.Length == 2)
-                    {
-                        string key = words[1];
-                        bool isNormal = !words[1].StartsWith("!");
-                        if (key.StartsWith("!"))
-                        {
-                            key = key.Substring(1);
-                        }
-
-                        if (_variables.ContainsKey(key))
-                        {
-                            _variables[key] = isNormal;
-                        }
                         else
                         {
-                            _variables.Add(key, isNormal);
-                        }
-                    }
-                    else
-                    {
-                        if (ShowErrors)
-                        {
-                            throw new InterpreterException(
-                                "Interpreter: Invalid syntax in '" + line +
-                                "'. Must be 2 or 4 words in length.");
+                            if (ShowErrors)
+                            {
+                                throw new InterpreterException(
+                                    "Interpreter: In the line '" + line +
+                                    "', you need to provide a variable name to " +
+                                    "set, using syntax like set a, set !a, or " +
+                                    "a mathematical expression.");
+                            }
                         }
                     }
 
@@ -2099,8 +2117,8 @@ namespace AdventureText.Parsing
                     else
                     {
                         throw new InterpreterException(
-                        "Interpreter: Image given on line '" +
-                        line + "' could not be found.");
+                            "Interpreter: Image given on line '" +
+                            line + "' could not be found.");
                     }
 
                     //Deletes the line just processed.
@@ -2389,13 +2407,12 @@ namespace AdventureText.Parsing
         }
 
         /// <summary>
-        /// Automatically sets variables to indicate pages were visited.
+        /// Called when a fork is finished executing or is stopped so
+        /// another fork can run, in which this should execute immediately.
         /// </summary>
         private void VisitFork()
         {
-            //Called when a fork is finished executing or is stopped so
-            //another fork can run, in which this should execute
-            //immediately.
+            // Automatically sets variables to indicate pages were visited.
             if (!_variables.ContainsKey("visited" + _fork))
             {
                 _variables.Add("visited" + _fork, true);
