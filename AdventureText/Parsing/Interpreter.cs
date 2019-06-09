@@ -1710,6 +1710,109 @@ namespace AdventureText.Parsing
                 }
                 #endregion
 
+                //TEST TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO
+                if (textLeft.StartsWith("run test"))
+                {
+                    //TODO: This is a test point to try and utilize Parry.
+                    Rpg.Core.Character myChar = new Rpg.Core.Character();
+                    Rpg.Core.Character myChar2 = new Rpg.Core.Character();
+
+                    Rpg.Core.CombatCharacter myCombatChar = new Rpg.Core.CombatCharacter(myChar);
+                    myCombatChar.CombatSpeed = new Rpg.Core.Attribute(3);
+                    myCombatChar.teamId = 1;
+                    myCombatChar.Character.AddAttribute("name", new Rpg.Core.Attribute("Squeak"));
+                    myCombatChar.Character.AddAttribute("health", new Rpg.Core.Attribute(100));
+                    myCombatChar.Character.AddAttribute("min-damage", new Rpg.Core.Attribute(5));
+                    myCombatChar.Character.AddAttribute("max-damage", new Rpg.Core.Attribute(10));
+                    myCombatChar.Character.AddAttribute("crit-chance", new Rpg.Core.Attribute(10));
+
+                    Rpg.Core.CombatCharacter myCombatChar2 = new Rpg.Core.CombatCharacter(myChar2);
+                    myCombatChar2.CombatSpeed = new Rpg.Core.Attribute(2);
+                    myCombatChar2.teamId = 2;
+                    myCombatChar2.Character.AddAttribute("name", new Rpg.Core.Attribute("Bub"));
+                    myCombatChar2.Character.AddAttribute("health", new Rpg.Core.Attribute(70));
+                    myCombatChar2.Character.AddAttribute("min-damage", new Rpg.Core.Attribute(3));
+                    myCombatChar2.Character.AddAttribute("max-damage", new Rpg.Core.Attribute(20));
+                    myCombatChar2.Character.AddAttribute("crit-chance", new Rpg.Core.Attribute(10));
+
+                    Rpg.Core.CombatModule myCombatMod = new Rpg.Core.CombatModule(
+                        new List<Rpg.Core.CombatCharacter>() { myCombatChar, myCombatChar2 });
+
+                    //Characters are removed from combat at 0 health.
+                    myCombatChar.RemoveFromCombat.AddComputeCallback((a) =>
+                    {
+                        if ((int)myCombatChar.Character["health"].Value <= 0 &&
+                        (int)myCombatChar.Character["health"].Value != Int32.MinValue)
+                        {
+                            myCombatChar.RemoveFromCombat.Value = true;
+                            Run genRun = new Run("\nSqueak died.");
+                            genRun.Foreground = Brushes.Red;
+                            _console.AddText(genRun);
+                        }
+                    });
+
+                    myCombatChar2.RemoveFromCombat.AddComputeCallback((a) =>
+                    {
+                        if ((int)myCombatChar2.Character["health"].Value <= 0)
+                        {
+                            myCombatChar2.RemoveFromCombat.Value = true;
+                            Run genRun = new Run("\nBub died.");
+                            genRun.Foreground = Brushes.Red;
+                            _console.AddText(genRun);
+                        }
+                    });
+
+                    //Generic function to deal damage.
+                    Random rng = new Random();
+                    var combatAction = new Action<List<Rpg.Core.CombatCharacter>>((chars) =>
+                    {
+                        Rpg.Core.CombatCharacter chr = myCombatMod.GetActiveCharacter();
+                        chars = myCombatMod.GetEnemyTeams(chr.teamId);
+
+                        if (chars.Count > 0)
+                        {
+                            //Randomized damage.
+                            int actualDamage = rng.Next(
+                                (int)chr.Character["min-damage"].Value,
+                                (int)chr.Character["max-damage"].Value);
+
+                            //Critical hits.
+                            if (rng.Next(100) <= (int)chr.Character["crit-chance"].Value)
+                            {
+                                actualDamage = (int)(actualDamage * 1.5);
+                            }
+
+                            //Applies damage.
+                            chars[0].Character["health"].Value = 
+                                (int)chars[0].Character["health"].Value - actualDamage;
+
+                            Run genRun = new Run("\nDealt " + actualDamage + " damage."
+                                + (string)chars[0].Character["name"].Value
+                                + " has "
+                                + (int)chars[0].Character["health"].Value + " health left.");
+                            genRun.Foreground = Brushes.White;
+                            _console.AddText(genRun);
+                        }
+                    });
+
+                    //Hooks the damaging function to characters.
+                    myCombatChar.CombatAction = combatAction;
+                    myCombatChar2.CombatAction = combatAction;
+
+                    //Enters combat.
+                    myCombatMod.ComputeCombat(null);
+
+                    //Deletes the line just processed.
+                    if (endOfLine >= 0)
+                    {
+                        textLeft = textLeft.Substring(textLeft.IndexOf('\n') + 1);
+                    }
+                    else
+                    {
+                        textLeft = String.Empty;
+                    }
+                }
+
                 #region Set variables.
                 else if (textLeft.StartsWith("set"))
                 {

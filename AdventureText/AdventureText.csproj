@@ -90,6 +90,11 @@
     <Compile Include="Parsing\ParseNode.cs" />
     <Compile Include="Parsing\Parser.cs" />
     <Compile Include="Parsing\ParserException.cs" />
+    <Compile Include="Rpg\Core\Attribute.cs" />
+    <Compile Include="Rpg\Core\AttributeCollection.cs" />
+    <Compile Include="Rpg\Core\Character.cs" />
+    <Compile Include="Rpg\Core\CombatCharacter.cs" />
+    <Compile Include="Rpg\Core\CombatModule.cs" />
     <Compile Include="Speech\SpeechEngine.cs" />
     <Compile Include="Utils.cs" />
   </ItemGroup>
@@ -140,6 +145,9 @@
   </ItemGroup>
   <ItemGroup>
     <Resource Include="TxtAdvIco.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Rpg\TextAdv\" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
